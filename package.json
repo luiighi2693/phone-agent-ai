@@ -1,0 +1,28 @@
+{
+  "name": "phone-agent-ai",
+  "version": "1.0.0",
+  "description": "Agente telefónico con IA para pedidos automatizados",
+  "main": "dist/src/functions/callHandler/index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "prestart": "npm run build",
+    "start": "func start",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.0.0",
+    "@azure/communication-calling": "^1.13.1",
+    "@azure/communication-common": "^2.2.0",
+    "@azure/openai": "^1.0.0-beta.7",
+    "microsoft-cognitiveservices-speech-sdk": "^1.33.1",
+    "axios": "^1.6.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@azure/functions-core-tools": "^4.0.5455",
+    "@types/node": "^20.0.0",
+    "@types/uuid": "^9.0.0",
+    "typescript": "^5.0.0"
+  }
+}

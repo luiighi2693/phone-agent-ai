@@ -1,0 +1,11 @@
+*.js.map
+*.ts.map
+.git*
+.vscode
+local.settings.json
+test
+tsconfig.json
+.funcignore
+erp-simulator/
+README.md
+*.md
