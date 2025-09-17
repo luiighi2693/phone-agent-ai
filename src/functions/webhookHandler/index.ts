@@ -38,7 +38,7 @@ export async function webhookHandler(request: HttpRequest, context: InvocationCo
     }
 
   } catch (error: any) {
-    context.log.error('❌ Error en webhook handler:', error);
+    context.error('❌ Error en webhook handler:', error);
     
     return {
       status: 500,
@@ -116,7 +116,7 @@ async function handleCallConnected(eventData: any, context: InvocationContext): 
     });
     
   } catch (error) {
-    context.log.error('❌ Error llamando a callHandler:', error);
+    context.error('❌ Error llamando a callHandler:', error);
   }
   
   return {
@@ -182,7 +182,7 @@ async function handleRecognizeCompleted(eventData: any, context: InvocationConte
       })
     });
     
-    const result = await response.json();
+    const result = await response.json() as any;
     
     if (result.success) {
       const actions = [];
@@ -229,7 +229,7 @@ async function handleRecognizeCompleted(eventData: any, context: InvocationConte
     }
     
   } catch (error) {
-    context.log.error('❌ Error procesando texto reconocido:', error);
+    context.error('❌ Error procesando texto reconocido:', error);
   }
   
   // Fallback en caso de error
@@ -308,7 +308,7 @@ async function handleCallDisconnected(eventData: any, context: InvocationContext
     });
     
   } catch (error) {
-    context.log.error('❌ Error notificando desconexión:', error);
+    context.error('❌ Error notificando desconexión:', error);
   }
   
   return {

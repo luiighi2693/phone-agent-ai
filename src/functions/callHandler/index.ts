@@ -41,7 +41,7 @@ export async function callHandler(request: HttpRequest, context: InvocationConte
     }
 
   } catch (error: any) {
-    context.log.error('❌ Error en callHandler:', error);
+    context.error('❌ Error en callHandler:', error);
     
     return {
       status: 500,
@@ -104,7 +104,7 @@ async function handleCallConnected(callId: string, customerPhone: string, contex
     };
 
   } catch (error: any) {
-    context.log.error('❌ Error manejando conexión de llamada:', error);
+    context.error('❌ Error manejando conexión de llamada:', error);
     
     const fallbackMessage = "Bienvenido, gracias por llamar. ¿En qué puedo ayudarle hoy?";
     
@@ -224,7 +224,7 @@ async function handleSpeechRecognized(callId: string, customerPhone: string, tra
     };
 
   } catch (error: any) {
-    context.log.error('❌ Error procesando speech:', error);
+    context.error('❌ Error procesando speech:', error);
     
     return {
       status: 200,
@@ -326,7 +326,7 @@ async function handleERPFunction(functionCall: any, erpConnector: ERPConnector, 
         };
     }
   } catch (error: any) {
-    logContext.log.error(`❌ Error en función ERP ${name}:`, error);
+    logContext.error(`❌ Error en función ERP ${name}:`, error);
     return {
       message: "Disculpe, tuve un problema consultando nuestro sistema. ¿Podría intentar de nuevo?",
       data: { error: error.message }
