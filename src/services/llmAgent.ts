@@ -1,306 +1,328 @@
-import { OpenAIClient, AzureKeyCredential } from '@azure/openai';
-import { ConversationContext, AgentResponse, ERPProduct } from '../types';
+import OpenAI from 'openai';
+import { ConversationContext, LLMResponse, Product } from '../types';
 
 export class LLMAgent {
-  private client: OpenAIClient;
+  private client?: OpenAI;
   private deploymentName: string;
-  private companyName: string;
+  private useMock: boolean;
 
   constructor() {
-    const endpoint = process.env.AZURE_OPENAI_ENDPOINT!;
-    const apiKey = process.env.AZURE_OPENAI_KEY!;
+    this.useMock = !process.env.AZURE_OPENAI_KEY || process.env.USE_MOCK === 'true';
+    
+    if (!this.useMock) {
+      this.client = new OpenAI({
+        apiKey: process.env.AZURE_OPENAI_KEY,
+        baseURL: `${process.env.AZURE_OPENAI_ENDPOINT}/openai/deployments/${process.env.AZURE_OPENAI_DEPLOYMENT_NAME}`,
+        defaultQuery: { 'api-version': '2024-02-15-preview' },
+        defaultHeaders: {
+          'api-key': process.env.AZURE_OPENAI_KEY,
+        },
+      });
+    }
+    
     this.deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || 'gpt-4-turbo';
-    this.companyName = process.env.COMPANY_NAME || 'Su Empresa';
+  }
 
-    this.client = new OpenAIClient(endpoint, new AzureKeyCredential(apiKey));
+  buildWelcomeMessage(customerName: string): string {
+    const companyName = process.env.COMPANY_NAME || 'nuestra empresa';
+    
+    if (customerName === 'Cliente') {
+      return `¡Hola! Bienvenido a ${companyName}. Soy su asistente virtual y estoy aquí para ayudarle con sus pedidos. ¿En qué puedo asistirle hoy?`;
+    }
+    
+    return `¡Hola ${customerName}! Bienvenido de nuevo a ${companyName}. Soy su asistente virtual. ¿En qué puedo ayudarle con su pedido hoy?`;
   }
 
   async processCustomerInput(
-    context: ConversationContext, 
-    userInput: string,
-    availableProducts?: ERPProduct[]
-  ): Promise<AgentResponse> {
+    context: ConversationContext,
+    input: string,
+    availableProducts: Product[]
+  ): Promise<LLMResponse> {
+    // Usar mock si no hay credenciales de Azure
+    if (this.useMock) {
+      return this.processMockInput(input);
+    }
+
     try {
       const systemPrompt = this.buildSystemPrompt(context, availableProducts);
-      const conversationHistory = this.buildConversationHistory(context, userInput);
+      const conversationHistory = this.buildConversationHistory(context);
 
-      const response = await this.client.getChatCompletions(
-        this.deploymentName,
-        conversationHistory,
-        {
-          maxTokens: 800,
-          temperature: 0.3,
-          topP: 0.9,
-          functions: this.getFunctionDefinitions(),
-          functionCall: 'auto'
-        }
-      );
+      const response = await this.client!.chat.completions.create({
+        model: this.deploymentName,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...conversationHistory,
+          { role: 'user', content: input }
+        ],
+        temperature: 0.3,
+        max_tokens: 500,
+        tools: this.getToolDefinitions(),
+        tool_choice: 'auto'
+      });
 
-      const choice = response.choices[0];
+      const message = response.choices[0].message;
       
-      if (choice.message?.functionCall) {
-        return this.parseFunctionCall(choice.message.functionCall);
+      if (message?.tool_calls && message.tool_calls.length > 0) {
+        const toolCall = message.tool_calls[0];
+        return {
+          intent: this.extractIntent(input),
+          confidence: 0.8,
+          message: 'Procesando su solicitud...',
+          action: 'speak',
+          requiresERPQuery: true,
+          functionCall: {
+            name: toolCall.function.name,
+            parameters: JSON.parse(toolCall.function.arguments || '{}')
+          }
+        };
       }
 
-      return this.parseTextResponse(choice.message?.content || 'Lo siento, no pude procesar su solicitud.');
+      const responseText = message?.content || 'Disculpe, no pude procesar su solicitud.';
       
-    } catch (error: any) {
-      console.error('Error en LLM Agent:', error);
       return {
-        message: 'Disculpe, tenemos problemas técnicos temporales. ¿Podría repetir su solicitud?',
+        intent: this.extractIntent(input),
+        confidence: 0.9,
+        message: responseText,
+        action: this.determineAction(responseText),
+        requiresERPQuery: false
+      };
+
+    } catch (error: any) {
+      console.error('Error procesando con LLM:', error);
+      
+      return {
         intent: 'error',
-        confidence: 0,
-        requiresERPQuery: false,
-        action: 'clarify'
+        confidence: 0.1,
+        message: 'Disculpe, tengo problemas técnicos temporales. ¿Podría repetir su solicitud?',
+        action: 'speak',
+        requiresERPQuery: false
       };
     }
   }
 
-  private buildSystemPrompt(context: ConversationContext, availableProducts?: ERPProduct[]): string {
-    const productList = availableProducts 
-      ? availableProducts.slice(0, 10).map(p => `- ${p.codigo}: ${p.nombre} ($${p.precio_unitario}, Stock: ${p.stock_disponible})`).join('\n')
-      : '';
+  private processMockInput(input: string): LLMResponse {
+    const lowerInput = input.toLowerCase();
+    
+    // Detectar pedidos (más específico)
+    if ((lowerInput.includes('pedido') || lowerInput.includes('comprar') || lowerInput.includes('quiero')) && 
+        (lowerInput.includes('lap001') || lowerInput.includes('laptop'))) {
+      return {
+        intent: 'order_creation',
+        confidence: 0.9,
+        message: 'Creando borrador de pedido...',
+        action: 'speak',
+        requiresERPQuery: true,
+        functionCall: {
+          name: 'create_order_draft',
+          parameters: {
+            items: [{ product_code: 'LAP001', quantity: 2 }]
+          }
+        }
+      };
+    }
+    
+    // Detectar consulta de precio específico
+    if (lowerInput.includes('lap001') || (lowerInput.includes('precio') && lowerInput.includes('lap001'))) {
+      return {
+        intent: 'price_inquiry',
+        confidence: 0.9,
+        message: 'Consultando información del producto...',
+        action: 'speak',
+        requiresERPQuery: true,
+        functionCall: {
+          name: 'query_product_info',
+          parameters: { product_code: 'LAP001' }
+        }
+      };
+    }
+    
+    // Detectar búsqueda de productos
+    if (lowerInput.includes('laptop') || lowerInput.includes('computadora') || lowerInput.includes('información')) {
+      return {
+        intent: 'product_search',
+        confidence: 0.9,
+        message: 'Procesando búsqueda...',
+        action: 'speak',
+        requiresERPQuery: true,
+        functionCall: {
+          name: 'search_products',
+          parameters: { search_term: 'laptop' }
+        }
+      };
+    }
+    
+    // Detectar confirmación
+    if (lowerInput.includes('sí') || lowerInput.includes('confirmar') || lowerInput.includes('correcto')) {
+      return {
+        intent: 'confirmation',
+        confidence: 0.9,
+        message: 'Perfecto, procesando su confirmación...',
+        action: 'speak',
+        requiresERPQuery: true,
+        functionCall: {
+          name: 'create_order_draft',
+          parameters: {
+            items: [{ product_code: 'LAP001', quantity: 2 }]
+          }
+        }
+      };
+    }
+    
+    // Detectar despedida
+    if (lowerInput.includes('gracias') || lowerInput.includes('terminar') || lowerInput.includes('adiós')) {
+      return {
+        intent: 'end_conversation',
+        confidence: 0.9,
+        message: 'Gracias por llamar. ¡Que tenga un excelente día!',
+        action: 'end_call',
+        requiresERPQuery: false
+      };
+    }
+    
+    return {
+      intent: 'general_inquiry',
+      confidence: 0.7,
+      message: 'Entiendo. ¿Podría ser más específico sobre lo que necesita? Puedo ayudarle con información de productos, precios o crear pedidos.',
+      action: 'speak',
+      requiresERPQuery: false
+    };
+  }
 
-    return `Eres un asistente telefónico especializado en tomar pedidos para ${this.companyName}.
+  private buildSystemPrompt(context: ConversationContext, products: Product[]): string {
+    const companyName = process.env.COMPANY_NAME || 'la empresa';
+    
+    return `Eres un asistente telefónico profesional de ${companyName}. Tu trabajo es ayudar a clientes empresariales a realizar pedidos por teléfono.
 
 INFORMACIÓN DEL CLIENTE:
 - Nombre: ${context.customerInfo.nombre}
-- Teléfono: ${context.customerInfo.telefono}
-- Descuento aplicable: ${(context.customerInfo.descuento * 100).toFixed(0)}%
+- Teléfono: ${context.customerPhone}
+- Descuento: ${context.customerInfo.descuento * 100}%
+- Crédito disponible: $${context.customerInfo.credito_disponible}
 
-${productList ? `PRODUCTOS DISPONIBLES:\n${productList}` : ''}
+PRODUCTOS DISPONIBLES:
+${products.slice(0, 10).map(p => `- ${p.codigo}: ${p.nombre} ($${p.precio_unitario})`).join('\n')}
 
 INSTRUCCIONES:
-1. Mantén un tono profesional pero amigable
-2. Si es el inicio de la conversación, saluda al cliente por su nombre
-3. Identifica la intención del cliente: consultar precios, verificar stock, hacer pedido
-4. Para pedidos, captura: código del producto, cantidad, especificaciones
-5. Siempre confirma los detalles antes de procesar
-6. Si no entiendes algo, pide aclaración educadamente
-7. Al finalizar un pedido, proporciona un resumen completo
+1. Sé profesional, amable y eficiente
+2. Ayuda al cliente a encontrar productos y crear pedidos
+3. Confirma siempre los detalles antes de procesar
+4. Si no entiendes algo, pide aclaración
+5. Usa las funciones disponibles para consultar productos y crear pedidos
+6. Mantén las respuestas concisas para conversación telefónica
+7. Siempre confirma el pedido antes de enviarlo al ERP
 
-IMPORTANTE:
-- Usa los códigos de producto exactos (ej: ABC-123)
-- Confirma disponibilidad antes de comprometerte
-- Calcula totales incluyendo descuentos si aplican
-- Mantén las respuestas concisas pero completas`;
+FLUJO TÍPICO:
+1. Saludo y identificación de necesidades
+2. Búsqueda/consulta de productos
+3. Confirmación de cantidades y precios
+4. Creación del pedido
+5. Confirmación final y despedida`;
   }
 
-  private buildConversationHistory(context: ConversationContext, userInput: string) {
-    const messages = [
-      { role: 'system', content: this.buildSystemPrompt(context) }
-    ];
-
-    // Agregar historial de conversación
-    context.conversationHistory.forEach(turn => {
-      messages.push({
-        role: turn.speaker === 'customer' ? 'user' : 'assistant',
-        content: turn.text
-      });
-    });
-
-    // Agregar input actual del usuario
-    messages.push({
-      role: 'user',
-      content: userInput
-    });
-
-    return messages;
+  private buildConversationHistory(context: ConversationContext): Array<{role: 'user' | 'assistant', content: string}> {
+    return context.conversationHistory.slice(-6).map(turn => ({
+      role: turn.speaker === 'customer' ? 'user' : 'assistant',
+      content: turn.text
+    }));
   }
 
-  private getFunctionDefinitions() {
+  private getToolDefinitions() {
     return [
       {
-        name: 'query_product_info',
-        description: 'Consulta información de un producto específico en el inventario',
-        parameters: {
-          type: 'object',
-          properties: {
-            product_code: {
-              type: 'string',
-              description: 'Código del producto a consultar (ej: ABC-123)'
-            }
-          },
-          required: ['product_code']
+        type: 'function' as const,
+        function: {
+          name: 'query_product_info',
+          description: 'Consultar información detallada de un producto específico',
+          parameters: {
+            type: 'object',
+            properties: {
+              product_code: {
+                type: 'string',
+                description: 'Código del producto a consultar'
+              }
+            },
+            required: ['product_code']
+          }
         }
       },
       {
-        name: 'search_products',
-        description: 'Busca productos por nombre o descripción',
-        parameters: {
-          type: 'object',
-          properties: {
-            search_term: {
-              type: 'string',
-              description: 'Término de búsqueda para encontrar productos'
-            }
-          },
-          required: ['search_term']
+        type: 'function' as const,
+        function: {
+          name: 'search_products',
+          description: 'Buscar productos por nombre o descripción',
+          parameters: {
+            type: 'object',
+            properties: {
+              search_term: {
+                type: 'string',
+                description: 'Término de búsqueda para encontrar productos'
+              }
+            },
+            required: ['search_term']
+          }
         }
       },
       {
-        name: 'create_order_draft',
-        description: 'Crea un borrador de pedido con los productos y cantidades especificados',
-        parameters: {
-          type: 'object',
-          properties: {
-            items: {
-              type: 'array',
+        type: 'function' as const,
+        function: {
+          name: 'create_order_draft',
+          description: 'Crear un borrador de pedido con los productos seleccionados',
+          parameters: {
+            type: 'object',
+            properties: {
               items: {
-                type: 'object',
-                properties: {
-                  product_code: { type: 'string' },
-                  quantity: { type: 'number' }
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    product_code: { type: 'string' },
+                    quantity: { type: 'number' }
+                  },
+                  required: ['product_code', 'quantity']
                 }
               }
             },
-            customer_notes: {
-              type: 'string',
-              description: 'Notas adicionales del cliente'
-            }
-          },
-          required: ['items']
-        }
-      },
-      {
-        name: 'calculate_order_total',
-        description: 'Calcula el total de un pedido incluyendo descuentos',
-        parameters: {
-          type: 'object',
-          properties: {
-            items: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  product_code: { type: 'string' },
-                  quantity: { type: 'number' },
-                  unit_price: { type: 'number' }
-                }
-              }
-            },
-            customer_discount: {
-              type: 'number',
-              description: 'Porcentaje de descuento del cliente (0.1 = 10%)'
-            }
-          },
-          required: ['items']
+            required: ['items']
+          }
         }
       }
     ];
   }
 
-  private parseFunctionCall(functionCall: any): AgentResponse {
-    const { name, arguments: args } = functionCall;
-    const parameters = JSON.parse(args);
-
-    switch (name) {
-      case 'query_product_info':
-        return {
-          message: `Consultando información del producto ${parameters.product_code}...`,
-          intent: 'query_product',
-          confidence: 0.9,
-          requiresERPQuery: true,
-          productCode: parameters.product_code,
-          action: 'query_inventory',
-          functionCall: { name, parameters }
-        };
-
-      case 'search_products':
-        return {
-          message: `Buscando productos relacionados con "${parameters.search_term}"...`,
-          intent: 'search_products',
-          confidence: 0.8,
-          requiresERPQuery: true,
-          action: 'query_inventory',
-          functionCall: { name, parameters }
-        };
-
-      case 'create_order_draft':
-        return {
-          message: 'Preparando su pedido...',
-          intent: 'create_order',
-          confidence: 0.9,
-          requiresERPQuery: true,
-          action: 'create_order',
-          functionCall: { name, parameters }
-        };
-
-      case 'calculate_order_total':
-        return {
-          message: 'Calculando el total de su pedido...',
-          intent: 'calculate_total',
-          confidence: 0.9,
-          requiresERPQuery: false,
-          action: 'clarify',
-          functionCall: { name, parameters }
-        };
-
-      default:
-        return this.parseTextResponse('Procesando su solicitud...');
-    }
-  }
-
-  private parseTextResponse(content: string): AgentResponse {
-    // Análisis simple de intención basado en palabras clave
-    const lowerContent = content.toLowerCase();
+  private extractIntent(input: string): string {
+    const lowerInput = input.toLowerCase();
     
-    let intent = 'general';
-    let action: AgentResponse['action'] = 'clarify';
-    let requiresERPQuery = false;
-
-    if (lowerContent.includes('pedido') || lowerContent.includes('orden') || lowerContent.includes('comprar')) {
-      intent = 'order_intent';
-      action = 'clarify';
-    } else if (lowerContent.includes('precio') || lowerContent.includes('costo')) {
-      intent = 'price_inquiry';
-      requiresERPQuery = true;
-      action = 'query_inventory';
-    } else if (lowerContent.includes('stock') || lowerContent.includes('disponible')) {
-      intent = 'stock_inquiry';
-      requiresERPQuery = true;
-      action = 'query_inventory';
-    } else if (lowerContent.includes('adiós') || lowerContent.includes('terminar') || lowerContent.includes('gracias')) {
-      intent = 'end_conversation';
-      action = 'end_call';
+    if (lowerInput.includes('precio') || lowerInput.includes('costo') || lowerInput.includes('cuánto')) {
+      return 'price_inquiry';
     }
-
-    return {
-      message: content,
-      intent,
-      confidence: 0.7,
-      requiresERPQuery,
-      action
-    };
-  }
-
-  buildWelcomeMessage(customerName: string): string {
-    const welcomeMessages = [
-      `¡Hola ${customerName}! Gracias por llamar a ${this.companyName}. Soy su asistente virtual y estoy aquí para ayudarle con sus pedidos. ¿En qué puedo asistirle hoy?`,
-      `Buenos días ${customerName}, bienvenido a ${this.companyName}. Soy su asistente para pedidos telefónicos. ¿Cómo puedo ayudarle?`,
-      `Hola ${customerName}, gracias por contactar a ${this.companyName}. Estoy listo para tomar su pedido o responder sus consultas. ¿Qué necesita hoy?`
-    ];
-
-    return welcomeMessages[Math.floor(Math.random() * welcomeMessages.length)];
-  }
-
-  buildOrderSummary(orderData: any, customerDiscount: number = 0): string {
-    const items = orderData.items.map((item: any) => 
-      `- ${item.product_name}: ${item.quantity} unidades a $${item.unit_price} c/u = $${item.total_price}`
-    ).join('\n');
-
-    const subtotal = orderData.total_amount;
-    const discount = subtotal * customerDiscount;
-    const total = subtotal - discount;
-
-    let summary = `Resumen de su pedido:\n${items}\n\nSubtotal: $${subtotal.toFixed(2)}`;
-    
-    if (discount > 0) {
-      summary += `\nDescuento (${(customerDiscount * 100).toFixed(0)}%): -$${discount.toFixed(2)}`;
+    if (lowerInput.includes('stock') || lowerInput.includes('disponible') || lowerInput.includes('hay')) {
+      return 'stock_inquiry';
+    }
+    if (lowerInput.includes('pedido') || lowerInput.includes('orden') || lowerInput.includes('comprar')) {
+      return 'order_creation';
+    }
+    if (lowerInput.includes('buscar') || lowerInput.includes('necesito') || lowerInput.includes('quiero')) {
+      return 'product_search';
+    }
+    if (lowerInput.includes('confirmar') || lowerInput.includes('sí') || lowerInput.includes('correcto')) {
+      return 'confirmation';
+    }
+    if (lowerInput.includes('cancelar') || lowerInput.includes('no') || lowerInput.includes('terminar')) {
+      return 'cancellation';
     }
     
-    summary += `\nTotal: $${total.toFixed(2)}\n\n¿Confirma este pedido?`;
+    return 'general_inquiry';
+  }
+
+  private determineAction(responseText: string): 'speak' | 'end_call' | 'transfer' {
+    const lowerResponse = responseText.toLowerCase();
     
-    return summary;
+    if (lowerResponse.includes('gracias por llamar') || 
+        lowerResponse.includes('que tenga buen día') ||
+        lowerResponse.includes('hasta luego')) {
+      return 'end_call';
+    }
+    
+    return 'speak';
   }
 }

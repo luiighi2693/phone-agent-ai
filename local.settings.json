@@ -1,0 +1,29 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "FUNCTIONS_EXTENSION_VERSION": "~4",
+    
+    "ACS_CONNECTION_STRING": "endpoint=https://your-acs.communication.azure.com/;accesskey=YOUR_ACCESS_KEY",
+    "ACS_PHONE_NUMBER": "+1234567890",
+    
+    "AZURE_OPENAI_ENDPOINT": "https://your-openai.openai.azure.com/",
+    "AZURE_OPENAI_KEY": "",
+    "AZURE_OPENAI_DEPLOYMENT_NAME": "gpt-4-turbo",
+    "USE_MOCK": "true",
+    
+    "AZURE_SPEECH_KEY": "",
+    "AZURE_SPEECH_REGION": "eastus",
+    
+    "ERP_API_BASE_URL": "http://localhost:3001/api",
+    "ERP_API_TOKEN": "demo-erp-token-12345",
+    
+    "COMPANY_NAME": "Tu Empresa Demo",
+    "LOG_LEVEL": "info"
+  },
+  "Host": {
+    "CORS": "*",
+    "LocalHttpPort": 7071
+  }
+}
