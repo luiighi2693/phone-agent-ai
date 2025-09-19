@@ -30,7 +30,10 @@ az cognitiveservices account deployment create \
   --resource-group "tu-rg" \
   --deployment-name "gpt-4-turbo" \
   --model-name "gpt-4" \
-  --model-version "turbo-2024-04-09"
+  --model-version "turbo-2024-04-09" \
+  --model-format "OpenAI" \
+  --sku-capacity 10 \
+  --sku-name "Standard"
 ```
 
 ### 2. Configurar Azure Communication Services
