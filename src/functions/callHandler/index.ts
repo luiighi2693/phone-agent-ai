@@ -8,10 +8,17 @@ import { ConversationContext, ConversationState, ConversationTurn } from '../../
 const conversationStore = new Map<string, ConversationContext>();
 
 export async function callHandler(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
-  context.log('📞 Nueva solicitud de llamada recibida');
+  context.log('📞 Nueva solicitud recibida');
   
   try {
-    // Parsear el cuerpo de la solicitud
+    // Detectar si es request de Twilio (form-encoded)
+    const contentType = request.headers.get('content-type') || '';
+    
+    if (contentType.includes('application/x-www-form-urlencoded')) {
+      return await handleTwilioRequest(request, context);
+    }
+    
+    // Parsear el cuerpo de la solicitud (Azure)
     const body = await request.json() as any;
     const { callId, customerPhone, transcribedText, eventType } = body;
 
@@ -359,9 +366,95 @@ async function handleGeneralRequest(callId: string, customerPhone: string, input
   return await handleSpeechRecognized(callId, customerPhone, input, context);
 }
 
+async function handleTwilioRequest(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
+  context.log('📞 Webhook de Twilio recibido');
+  
+  try {
+    // Parsear datos de Twilio (form-encoded)
+    const body = await request.text();
+    const params = new URLSearchParams(body);
+    
+    const callSid = params.get('CallSid');
+    const from = params.get('From');
+    const speechResult = params.get('SpeechResult');
+    
+    context.log(`📱 Llamada: ${callSid} de ${from}`);
+    
+    // Si es una nueva llamada
+    if (!speechResult) {
+      return generateTwiMLResponse("Bienvenido, gracias por llamar. ¿En qué puedo ayudarle hoy?", true);
+    }
+    
+    // Si hay resultado de speech-to-text, procesar con el agente
+    if (speechResult) {
+      const erpConnector = new ERPConnector();
+      const llmAgent = new LLMAgent();
+      
+      const customerInfo = await erpConnector.getCustomerByPhone(from!);
+      const availableProducts = await erpConnector.getAllProducts();
+      
+      const conversationContext: ConversationContext = {
+        callId: callSid!,
+        customerPhone: from!,
+        customerInfo,
+        conversationHistory: []
+      };
+      
+      const agentResponse = await llmAgent.processCustomerInput(
+        conversationContext,
+        speechResult,
+        availableProducts
+      );
+      
+      let finalMessage = agentResponse.message;
+      
+      if (agentResponse.requiresERPQuery && agentResponse.functionCall) {
+        const erpResult = await handleERPFunction(agentResponse.functionCall, erpConnector, conversationContext, context);
+        finalMessage = erpResult.message;
+      }
+      
+      const shouldContinue = agentResponse.action !== 'end_call';
+      return generateTwiMLResponse(finalMessage, shouldContinue);
+    }
+    
+    return generateTwiMLResponse("Lo siento, no pude procesar su solicitud.");
+    
+  } catch (error: any) {
+    context.error('❌ Error en Twilio webhook:', error);
+    return generateTwiMLResponse("Disculpe, tenemos problemas técnicos temporales.");
+  }
+}
+
+function generateTwiMLResponse(message: string, continueListening: boolean = false): HttpResponseInit {
+  let twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice" language="es-MX">${message}</Say>`;
+
+  if (continueListening) {
+    twiml += `
+  <Gather input="speech" timeout="10" speechTimeout="auto" language="es-MX">
+    <Say voice="alice" language="es-MX">Por favor, dígame en qué puedo ayudarle.</Say>
+  </Gather>`;
+  } else {
+    twiml += `
+  <Hangup/>`;
+  }
+
+  twiml += `
+</Response>`;
+
+  return {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/xml'
+    },
+    body: twiml
+  };
+}
+
 // Registrar la función con Azure Functions
 app.http('callHandler', {
   methods: ['GET', 'POST'],
-  authLevel: 'function',
+  authLevel: 'anonymous',
   handler: callHandler
 });
